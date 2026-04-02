@@ -12,7 +12,6 @@ from logic_utils import frozen, frozendict
 
 from predicates.syntax import *
 
-#: A generic type for a universe element in a model.
 T = TypeVar('T')
 
 @frozen
@@ -74,7 +73,7 @@ class Model(Generic[T]):
             assert is_relation(relation)
             relation_interpretation = relation_interpretations[relation]
             if len(relation_interpretation) == 0:
-                arity = -1 # any
+                arity = -1
             else:
                 some_arguments = next(iter(relation_interpretation))
                 arity = len(some_arguments)
@@ -146,7 +145,15 @@ class Model(Generic[T]):
         for function,arity in term.functions():
             assert function in self.function_interpretations and \
                    self.function_arities[function] == arity
-        # Task 7.7
+        if is_constant(term.root):
+            return self.constant_interpretations[term.root]
+        elif is_variable(term.root):
+            return assignment[term.root]
+        else:
+            evaluated_args = tuple(
+                self.evaluate_term(arg, assignment) for arg in term.arguments
+            )
+            return self.function_interpretations[term.root][evaluated_args]
 
     def evaluate_formula(self, formula: Formula,
                          assignment: Mapping[str, T] = frozendict()) -> bool:
@@ -175,7 +182,42 @@ class Model(Generic[T]):
         for relation,arity in formula.relations():
             assert relation in self.relation_interpretations and \
                    self.relation_arities[relation] in {-1, arity}
-        # Task 7.8
+        root = formula.root
+        if is_equality(root):
+            left_val = self.evaluate_term(formula.arguments[0], assignment)
+            right_val = self.evaluate_term(formula.arguments[1], assignment)
+            return left_val == right_val
+        elif is_relation(root):
+            evaluated_args = tuple(
+                self.evaluate_term(arg, assignment) for arg in formula.arguments
+            )
+            return evaluated_args in self.relation_interpretations[root]
+        elif is_unary(root):
+            return not self.evaluate_formula(formula.first, assignment)
+        elif is_binary(root):
+            left = self.evaluate_formula(formula.first, assignment)
+            right = self.evaluate_formula(formula.second, assignment)
+            if root == '&':
+                return left and right
+            elif root == '|':
+                return left or right
+            elif root == '->':
+                return (not left) or right
+            elif root == '<->':
+                return left == right
+        elif is_quantifier(root):
+            variable = formula.variable
+            subformula = formula.statement
+            if root == 'A':
+                return all(
+                    self.evaluate_formula(subformula, {**assignment, variable: element})
+                    for element in self.universe
+                )
+            elif root == 'E':
+                return any(
+                    self.evaluate_formula(subformula, {**assignment, variable: element})
+                    for element in self.universe
+                )
 
     def is_model_of(self, formulas: AbstractSet[Formula]) -> bool:
         """Checks if the current model is a model of the given formulas.
@@ -199,4 +241,15 @@ class Model(Generic[T]):
             for relation,arity in formula.relations():
                 assert relation in self.relation_interpretations and \
                        self.relation_arities[relation] in {-1, arity}
-        # Task 7.9
+        from itertools import product as iterproduct
+        for formula in formulas:
+            free_vars = list(formula.free_variables())
+            if len(free_vars) == 0:
+                if not self.evaluate_formula(formula):
+                    return False
+            else:
+                for values in iterproduct(self.universe, repeat=len(free_vars)):
+                    assignment = dict(zip(free_vars, values))
+                    if not self.evaluate_formula(formula, assignment):
+                        return False
+        return True
